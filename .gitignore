@@ -38,6 +38,7 @@ vdr-notes/
 .netrc
 .npmrc
 .pypirc
+.codex
 credentials.json
 DRAFT-*.md
 key.json
