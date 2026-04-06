@@ -2017,7 +2017,6 @@ async function createSandbox(
   for (const p of messagingProviders) {
     createArgs.push("--provider", p);
   }
-
   console.log(`  Creating sandbox '${sandboxName}' (this takes a few minutes on first run)...`);
   if (webSearchConfig && !getCredential(webSearch.BRAVE_API_KEY_ENV)) {
     console.error("  Brave Search is enabled, but BRAVE_API_KEY is not available in this process.");
@@ -2080,6 +2079,10 @@ async function createSandbox(
   const sandboxEnv = Object.fromEntries(
     Object.entries(process.env).filter(([name]) => !blockedSandboxEnvNames.has(name)),
   );
+  const tavilyApiKey = getCredential("TAVILY_API_KEY") || process.env.TAVILY_API_KEY;
+  if (tavilyApiKey) {
+    sandboxEnv.TAVILY_API_KEY = tavilyApiKey;
+  }
   // Run without piping through awk — the pipe masked non-zero exit codes
   // from openshell because bash returns the status of the last pipeline
   // command (awk, always 0) unless pipefail is set. Removing the pipe
@@ -2891,7 +2894,10 @@ async function setupInference(
       console.error(`  ${providerResult.message}`);
       process.exit(providerResult.status || 1);
     }
-    runOpenshell(["inference", "set", "--no-verify", "--provider", "vllm-local", "--model", model]);
+    // The local endpoint is validated above, and some OpenShell builds already
+    // inject no-verify behavior for local compatible routes. Avoid passing a
+    // duplicate --no-verify flag here.
+    runOpenshell(["inference", "set", "--provider", "vllm-local", "--model", model]);
   } else if (provider === "ollama-local") {
     const validation = validateLocalProvider(provider, runCapture);
     if (!validation.ok) {
@@ -3160,6 +3166,10 @@ async function _setupPolicies(sandboxName) {
     suggestions.push("discord");
     console.log("  Auto-detected: DISCORD_BOT_TOKEN → suggesting discord preset");
   }
+  if (getCredential("TAVILY_API_KEY") || process.env.TAVILY_API_KEY) {
+    suggestions.push("tavily");
+    console.log("  Auto-detected: TAVILY_API_KEY → suggesting tavily preset");
+  }
 
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);
@@ -3304,6 +3314,7 @@ async function setupPoliciesWithSelection(sandboxName, options = {}) {
   if (getCredential("DISCORD_BOT_TOKEN") || process.env.DISCORD_BOT_TOKEN)
     suggestions.push("discord");
   if (webSearchConfig) suggestions.push("brave");
+  if (getCredential("TAVILY_API_KEY") || process.env.TAVILY_API_KEY) suggestions.push("tavily");
 
   const allPresets = policies.listPresets();
   const applied = policies.getAppliedPresets(sandboxName);

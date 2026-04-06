@@ -1,0 +1,23 @@
+{
+  "name": "ai-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Assistant companion app for NemoClaw",
+  "scripts": {
+    "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/copy-static.mjs",
+    "dev": "node ../../node_modules/tsx/dist/cli.mjs backend/src/server.ts",
+    "start": "node dist/backend/src/server.js",
+    "tauri:backend": "bash scripts/start-backend.sh",
+    "tauri:dev": "npm run build && npx tauri dev",
+    "tauri:build": "npm run build && npx tauri build",
+    "test": "cd ../.. && node node_modules/vitest/vitest.mjs run --config vitest.config.ts --project ai-assistant"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "sharp": "^0.34.5"
+  }
+}

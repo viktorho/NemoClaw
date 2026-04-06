@@ -120,6 +120,7 @@ describe("policies", () => {
         "outlook",
         "pypi",
         "slack",
+        "tavily",
         "telegram",
       ];
       expect(names).toEqual(expected);

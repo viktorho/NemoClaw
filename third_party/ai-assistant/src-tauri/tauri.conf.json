@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Assistant",
+  "version": "0.1.0",
+  "identifier": "com.nemoclaw.aiassistant",
+  "build": {
+    "beforeDevCommand": "npm run tauri:backend",
+    "devUrl": "http://127.0.0.1:4317",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AI Assistant",
+        "width": 980,
+        "height": 860,
+        "minWidth": 760,
+        "minHeight": 620,
+        "alwaysOnTop": true,
+        "resizable": true,
+        "center": true,
+        "url": "http://127.0.0.1:4317"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}

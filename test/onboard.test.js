@@ -1551,6 +1551,7 @@ const { createSandbox } = require(${onboardPath});
     assert.doesNotMatch(createCommand.command, /NVIDIA_API_KEY=/);
     assert.doesNotMatch(createCommand.command, /DISCORD_BOT_TOKEN=/);
     assert.doesNotMatch(createCommand.command, /SLACK_BOT_TOKEN=/);
+    assert.doesNotMatch(createCommand.command, /TAVILY_API_KEY=/);
     assert.ok(
       payload.commands.some((entry) =>
         entry.command.includes("'forward' 'start' '--background' '18789' 'my-assistant'"),

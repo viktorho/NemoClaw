@@ -21,6 +21,12 @@ export default defineConfig({
       },
       {
         test: {
+          name: "ai-assistant",
+          include: ["third_party/ai-assistant/test/**/*.test.ts"],
+        },
+      },
+      {
+        test: {
           name: "e2e-brev",
           include: ["test/e2e/brev-e2e.test.js"],
           // Only run when explicitly targeted: npx vitest run --project e2e-brev

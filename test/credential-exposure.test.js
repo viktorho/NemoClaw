@@ -80,6 +80,7 @@ describe("credential exposure in process arguments", () => {
     expect(src).not.toMatch(/envArgs\.push\(formatEnvAssignment\("NVIDIA_API_KEY"/);
     expect(src).not.toMatch(/envArgs\.push\(formatEnvAssignment\("DISCORD_BOT_TOKEN"/);
     expect(src).not.toMatch(/envArgs\.push\(formatEnvAssignment\("SLACK_BOT_TOKEN"/);
+    expect(src).not.toMatch(/envArgs\.push\(formatEnvAssignment\("TAVILY_API_KEY"/);
   });
 
   it("onboard curl probes use explicit timeouts", () => {

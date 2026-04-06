@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Assistant</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="workspace">
+      <header class="workspace-header">
+        <div>
+          <p class="eyebrow">Desktop Chat</p>
+          <h1>AI Assistant</h1>
+        </div>
+        <span id="health-pill" class="status-pill">Syncing</span>
+      </header>
+
+      <main class="chat-shell">
+        <div id="message-list" class="message-list"></div>
+        <div id="status-banner" class="status-banner" hidden></div>
+      </main>
+
+      <form id="chat-form" class="composer">
+        <textarea
+          id="composer-input"
+          name="message"
+          rows="1"
+          placeholder="Message AI Assistant"
+        ></textarea>
+        <button type="submit" id="send-button" class="send-button" aria-label="Send message">
+          <span class="send-arrow">➜</span>
+        </button>
+      </form>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
