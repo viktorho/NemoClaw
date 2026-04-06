@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,5 +14,5 @@ fi
 
 cd "$ROOT_DIR"
 AI_ASSISTANT_HOST="${AI_ASSISTANT_HOST:-127.0.0.1}" \
-AI_ASSISTANT_PORT="${AI_ASSISTANT_PORT:-4317}" \
-node dist/backend/src/server.js
+  AI_ASSISTANT_PORT="${AI_ASSISTANT_PORT:-4317}" \
+  node dist/backend/src/server.js
