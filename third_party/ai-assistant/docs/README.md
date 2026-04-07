@@ -4,7 +4,7 @@
 It is built for a Windows desktop plus WSL workflow:
 
 - the backend runs locally in WSL
-- the UI is a local web app that can be wrapped by a Windows launcher
+- the desktop shell runs natively on Windows through `Tauri`
 - NemoClaw/OpenClaw acts as the planning engine
 - Telegram handles reminders
 
@@ -31,69 +31,43 @@ cd third_party/ai-assistant
 npm run dev
 ```
 
-## Run as a Desktop Window on Windows
-
-The current desktop deployment path is a Windows launcher that:
-
-- starts the AI Assistant backend inside WSL
-- waits for the local server to become healthy
-- opens the app in an always-on-top desktop window
-
-Run this from Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File \\wsl.localhost\Ubuntu\home\thovinh\NemoClaw\third_party\ai-assistant\desktop\launch.ps1
-```
-
-Or use the wrapper:
-
-```cmd
-\\wsl.localhost\Ubuntu\home\thovinh\NemoClaw\third_party\ai-assistant\desktop\launch.cmd
-```
-
-Options:
-
-- `-WslProjectPath /home/thovinh/NemoClaw/third_party/ai-assistant`
-- `-Port 4317`
-- `-SkipBuild`
-
-Example:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File \\wsl.localhost\Ubuntu\home\thovinh\NemoClaw\third_party\ai-assistant\desktop\launch.ps1 -SkipBuild
-```
-
-Notes:
-
-- The launcher uses a WinForms window with `TopMost = true`.
-- It prefers WebView2 when available and falls back to an embedded browser or your default browser if needed.
-- This is the current desktop deployment path until the Rust/Tauri runtime is installed and wired in.
-
 ## Tauri Desktop Shell
 
 `AI Assistant` now also includes a real `Tauri` app shell under `src-tauri/`.
 
-Available commands:
+Use the Windows-native shell, not `tauri:dev` from WSL. Run this from Windows PowerShell:
 
-```bash
-cd /home/thovinh/NemoClaw/third_party/ai-assistant
+```powershell
+cd \\wsl$\Ubuntu-24.04\home\thovinh\NemoClaw\third_party\ai-assistant
 npm run tauri:dev
 ```
 
-and:
+The command above:
 
-```bash
-cd /home/thovinh/NemoClaw/third_party/ai-assistant
+- launches the native Windows Tauri shell
+- starts the backend inside WSL through `wsl.exe`
+- connects the window to `http://127.0.0.1:4317`
+- automatically sets `CARGO_INCREMENTAL=0` and moves `CARGO_TARGET_DIR` to a Windows-local temp directory to avoid `\\wsl$` lock-file failures
+
+For a production build, still from Windows PowerShell:
+
+```powershell
+cd \\wsl$\Ubuntu-24.04\home\thovinh\NemoClaw\third_party\ai-assistant
 npm run tauri:build
 ```
 
 Current Tauri behavior:
 
-- creates a native always-on-top desktop window
+- creates a native Windows always-on-top desktop window
 - points the window at `http://127.0.0.1:4317`
-- starts the backend through `scripts/start-backend.sh`
+- starts the backend inside WSL through `wsl.exe` and `scripts/start-backend.sh`
 
 This is now the intended desktop-app path.
+
+Optional environment variables for the Windows shell:
+
+- `AI_ASSISTANT_WSL_DISTRO`
+- `AI_ASSISTANT_WSL_PROJECT_PATH`
 
 ## Environment
 
@@ -102,6 +76,8 @@ Optional environment variables:
 - `AI_ASSISTANT_PORT`
 - `AI_ASSISTANT_DATA_DIR`
 - `AI_ASSISTANT_DB_PATH`
+- `AI_ASSISTANT_WSL_DISTRO`
+- `AI_ASSISTANT_WSL_PROJECT_PATH`
 - `AI_ASSISTANT_SANDBOX`
 - `TELEGRAM_BOT_TOKEN`
 - `ALLOWED_CHAT_IDS`

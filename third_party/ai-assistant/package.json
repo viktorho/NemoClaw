@@ -8,9 +8,9 @@
     "build": "node ../../node_modules/typescript/bin/tsc -p tsconfig.json && node scripts/copy-static.mjs",
     "dev": "node ../../node_modules/tsx/dist/cli.mjs backend/src/server.ts",
     "start": "node dist/backend/src/server.js",
-    "tauri:backend": "bash scripts/start-backend.sh",
-    "tauri:dev": "npm run build && npx tauri dev",
-    "tauri:build": "npm run build && npx tauri build",
+    "tauri:backend": "node scripts/start-tauri-backend.mjs",
+    "tauri:dev": "npm run build && node scripts/run-tauri.mjs dev",
+    "tauri:build": "npm run build && node scripts/run-tauri.mjs build",
     "test": "cd ../.. && node node_modules/vitest/vitest.mjs run --config vitest.config.ts --project ai-assistant"
   },
   "devDependencies": {

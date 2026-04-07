@@ -1,6 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
@@ -8,13 +7,39 @@ use tauri::{AppHandle, Emitter, Manager};
 
 struct BackendChild(Mutex<Option<Child>>);
 
-fn repo_root_from_exe(app: &AppHandle) -> PathBuf {
-    if let Ok(dir) = app.path().app_data_dir() {
-        return dir;
-    }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+#[cfg(target_os = "windows")]
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+#[cfg(target_os = "windows")]
+fn spawn_backend(_app: &AppHandle) -> Option<Child> {
+    let distro = std::env::var("AI_ASSISTANT_WSL_DISTRO")
+        .unwrap_or_else(|_| "Ubuntu-24.04".to_string());
+    let project_dir = std::env::var("AI_ASSISTANT_WSL_PROJECT_PATH")
+        .unwrap_or_else(|_| "/home/thovinh/NemoClaw/third_party/ai-assistant".to_string());
+    let host = std::env::var("AI_ASSISTANT_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = std::env::var("AI_ASSISTANT_PORT").unwrap_or_else(|_| "4317".to_string());
+    let script = format!(
+        "cd {} && AI_ASSISTANT_HOST={} AI_ASSISTANT_PORT={} bash scripts/start-backend.sh",
+        shell_quote(&project_dir),
+        shell_quote(&host),
+        shell_quote(&port)
+    );
+
+    Command::new("wsl.exe")
+        .arg("-d")
+        .arg(distro)
+        .arg("bash")
+        .arg("-lc")
+        .arg(script)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()
+}
+
+#[cfg(not(target_os = "windows"))]
 fn spawn_backend(_app: &AppHandle) -> Option<Child> {
     let current_dir = std::env::current_dir().ok()?;
     let project_dir = current_dir;
