@@ -19,6 +19,7 @@ export const config = {
   port: parseInteger(process.env.AI_ASSISTANT_PORT, 4317),
   sandboxName: process.env.AI_ASSISTANT_SANDBOX ?? process.env.SANDBOX_NAME ?? "nemoclaw",
   nemoModel: process.env.AI_ASSISTANT_MODEL ?? "main",
+  debugTimings: process.env.AI_ASSISTANT_DEBUG_TIMINGS === "1",
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? null,
   allowedChatIds: (process.env.ALLOWED_CHAT_IDS ?? "")
     .split(",")

@@ -1,16 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createServer } from "node:http";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { config } from "./config.js";
 import { Database } from "./db.js";
 import { getAppSettings, getDesktopState, updateAppSettings, updateDesktopState } from "./desktop-state.js";
 import { analyzeEvidence, breakdownTask } from "./nemo-adapter.js";
 import { formatTaskNote } from "./nemo-adapter.js";
+import { generateChatReply } from "./nemo-adapter.js";
 import { processReminderTick } from "./reminder-engine.js";
 import { enrichContext } from "./research.js";
 import { applyProposal, buildWeeklyBlocks } from "./scheduler.js";
 import type {
+  ChatSession,
   CreateTaskInput,
   Proposal,
   TelegramSettings,
@@ -23,6 +25,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distRoot = path.resolve(__dirname, "..", "..");
 const publicRoot = path.join(distRoot, "frontend", "public");
 const frontendJsPath = path.join(distRoot, "frontend", "src", "app.js");
+const shouldLogChatTimings = config.debugTimings;
+const isMainModule = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
 
 const db = new Database();
 
@@ -47,6 +51,97 @@ async function handleCreateTask(rawBody: string) {
     priority: normalizePriority(input.priority),
   });
   return { task };
+}
+
+function ensureChatSession(sessionId?: string): ChatSession {
+  if (sessionId) {
+    const existing = db.getChatSession(sessionId);
+    if (!existing) {
+      throw new Error("chat session not found");
+    }
+    return existing;
+  }
+
+  const latest = db.getLatestChatSession();
+  if (latest) {
+    return latest;
+  }
+
+  const session = db.createChatSession();
+  db.createChatMessage({
+    sessionId: session.id,
+    role: "assistant",
+    text: "AI Assistant is ready. This chat is now backed by the local server.",
+  });
+  return session;
+}
+
+async function handleChatMessage(sessionId: string, rawBody: string) {
+  const totalStart = Date.now();
+  let session: ChatSession | null = null;
+  let dbReadMs = 0;
+  let agentMs = 0;
+  let dbWriteMs = 0;
+  let usedFallback = false;
+  let error: string | null = null;
+
+  try {
+    const dbReadStart = Date.now();
+    session = ensureChatSession(sessionId);
+    const body = parseJson<{ text?: string }>(rawBody, {});
+    const text = body.text?.trim();
+    if (!text) {
+      throw new Error("text is required");
+    }
+
+    const history = db.listRecentChatMessages(session.id, 6);
+    dbReadMs = Date.now() - dbReadStart;
+
+    const userWriteStart = Date.now();
+    const userMessage = db.createChatMessage({
+      sessionId: session.id,
+      role: "user",
+      text,
+    });
+    dbWriteMs += Date.now() - userWriteStart;
+
+    const agentStart = Date.now();
+    const reply = await generateChatReply(history, text);
+    agentMs = Date.now() - agentStart;
+    usedFallback = reply.usedFallback;
+    error = reply.error ?? null;
+
+    const assistantWriteStart = Date.now();
+    const assistantMessage = db.createChatMessage({
+      sessionId: session.id,
+      role: "assistant",
+      text: reply.result.content,
+    });
+    dbWriteMs += Date.now() - assistantWriteStart;
+
+    return {
+      session,
+      message: userMessage,
+      reply: assistantMessage,
+      usedFallback,
+      error,
+    };
+  } finally {
+    if (shouldLogChatTimings) {
+      console.log(
+        JSON.stringify({
+          event: "ai_assistant.chat_message_timing",
+          sessionId: session?.id ?? sessionId,
+          db_read_ms: dbReadMs,
+          agent_ms: agentMs,
+          db_write_ms: dbWriteMs,
+          total_ms: Date.now() - totalStart,
+          usedFallback,
+          error,
+        }),
+      );
+    }
+  }
 }
 
 async function handleBreakdown(taskId: string) {
@@ -287,6 +382,29 @@ const server = createServer(async (req, res) => {
       });
     }
 
+    if (req.method === "POST" && url.pathname === "/chat/session") {
+      const body = parseJson<{ sessionId?: string }>(await readBody(req), {});
+      const session = ensureChatSession(body.sessionId);
+      return respondJson(res, 200, {
+        session,
+        messages: db.listChatMessages(session.id),
+      });
+    }
+
+    if (req.method === "GET" && /^\/chat\/session\/[^/]+\/messages$/.test(url.pathname)) {
+      const sessionId = url.pathname.split("/")[3]!;
+      const session = ensureChatSession(sessionId);
+      return respondJson(res, 200, {
+        session,
+        messages: db.listChatMessages(session.id),
+      });
+    }
+
+    if (req.method === "POST" && /^\/chat\/session\/[^/]+\/message$/.test(url.pathname)) {
+      const sessionId = url.pathname.split("/")[3]!;
+      return respondJson(res, 200, await handleChatMessage(sessionId, await readBody(req)));
+    }
+
     if (req.method === "GET" && url.pathname === "/settings") {
       return respondJson(res, 200, {
         settings: getAppSettings(),
@@ -426,12 +544,16 @@ server.on("error", (error) => {
   console.error("AI Assistant failed to start:", error);
 });
 
-server.listen(config.port, config.host, () => {
-  console.log(`AI Assistant listening on http://${config.host}:${config.port}`);
-});
-
-setInterval(() => {
-  void processReminderTick(db).catch((error) => {
-    console.error("Reminder tick failed:", error);
+if (isMainModule) {
+  server.listen(config.port, config.host, () => {
+    console.log(`AI Assistant listening on http://${config.host}:${config.port}`);
   });
-}, config.reminderPollMs);
+
+  setInterval(() => {
+    void processReminderTick(db).catch((error) => {
+      console.error("Reminder tick failed:", error);
+    });
+  }, config.reminderPollMs);
+}
+
+export { handleChatMessage };

@@ -1,12 +1,23 @@
+type ChatRole = "assistant" | "user" | "system";
 type ChatMessage = {
   id: string;
-  role: "assistant" | "user" | "system";
+  sessionId: string;
+  role: ChatRole;
   text: string;
   createdAt: string;
 };
 
-const transcriptKey = "ai-assistant-chat-transcript";
-let transcript = loadTranscript();
+type ChatSession = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const sessionKey = "ai-assistant-chat-session-id";
+let currentSessionId: string | null = window.localStorage.getItem(sessionKey);
+let transcript: ChatMessage[] = [];
+let isSending = false;
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -27,10 +38,6 @@ function escapeHtml(input: string): string {
     .replaceAll(">", "&gt;");
 }
 
-function id(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
-}
-
 function formatDate(dateIso: string): string {
   return new Date(dateIso).toLocaleString([], {
     weekday: "short",
@@ -41,41 +48,8 @@ function formatDate(dateIso: string): string {
   });
 }
 
-function loadTranscript(): ChatMessage[] {
-  try {
-    const parsed = JSON.parse(window.sessionStorage.getItem(transcriptKey) ?? "[]") as ChatMessage[];
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
-    }
-  } catch {
-    // ignore corrupted transcript state
-  }
-
-  return [
-    {
-      id: id("msg"),
-      role: "assistant",
-      createdAt: new Date().toISOString(),
-      text: "AI Assistant is ready. This workspace is now intentionally minimal: just chat and responses.",
-    },
-  ];
-}
-
-function saveTranscript(messages: ChatMessage[]) {
-  window.sessionStorage.setItem(transcriptKey, JSON.stringify(messages));
-}
-
-function appendMessage(role: ChatMessage["role"], text: string) {
-  transcript = [
-    ...transcript,
-    {
-      id: id("msg"),
-      role,
-      text,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-  saveTranscript(transcript);
+function setTranscript(messages: ChatMessage[]) {
+  transcript = messages;
   renderTranscript();
 }
 
@@ -105,6 +79,13 @@ function setHealth(text: string) {
   pill.textContent = text;
 }
 
+function setComposerDisabled(disabled: boolean) {
+  const input = document.querySelector("#composer-input") as HTMLTextAreaElement | null;
+  const button = document.querySelector("#send-button") as HTMLButtonElement | null;
+  if (input) input.disabled = disabled;
+  if (button) button.disabled = disabled;
+}
+
 async function refreshHealth() {
   try {
     const health = await fetchJson<{ status: string; telegramConfigured: boolean; sandboxName: string }>("/health");
@@ -116,35 +97,65 @@ async function refreshHealth() {
   }
 }
 
+async function loadSession() {
+  const payload = await fetchJson<{ session: ChatSession; messages: ChatMessage[] }>("/chat/session", {
+    method: "POST",
+    body: JSON.stringify(currentSessionId ? { sessionId: currentSessionId } : {}),
+  });
+
+  currentSessionId = payload.session.id;
+  window.localStorage.setItem(sessionKey, currentSessionId);
+  setTranscript(payload.messages);
+}
+
 async function sendMessage(rawText: string) {
   const text = rawText.trim();
-  if (!text) return;
+  if (!text || isSending) return;
+  isSending = true;
+  setComposerDisabled(true);
 
-  appendMessage("user", text);
+  if (!currentSessionId) {
+    await loadSession();
+  }
+
   showBanner("Working...", true);
 
   try {
-    const task = await fetchJson<{ task: { title: string } }>("/tasks", {
+    const result = await fetchJson<{ messages?: ChatMessage[]; message: ChatMessage; reply: ChatMessage; error?: string | null }>(
+      `/chat/session/${currentSessionId}/message`,
+      {
       method: "POST",
-      body: JSON.stringify({
-        title: text,
-        description: "Created from the desktop chat workspace.",
-        priority: "medium",
-        estimateMinutes: 60,
-      }),
-    });
+        body: JSON.stringify({ text }),
+      },
+    );
 
-    appendMessage("assistant", `Added "${task.task.title}" to your task list.`);
+    setTranscript([...transcript, result.message, result.reply]);
     showBanner("", false);
-    await refreshHealth();
   } catch (error) {
-    appendMessage("system", error instanceof Error ? error.message : String(error));
+    transcript = [
+      ...transcript,
+      {
+        id: `local-error-${Date.now()}`,
+        sessionId: currentSessionId ?? "unknown",
+        role: "system",
+        text: error instanceof Error ? error.message : String(error),
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    renderTranscript();
+    setHealth("Offline");
     showBanner(error instanceof Error ? error.message : String(error));
+  } finally {
+    isSending = false;
+    setComposerDisabled(false);
+    (document.querySelector("#composer-input") as HTMLTextAreaElement | null)?.focus();
   }
 }
 
 document.querySelector("#chat-form")?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (isSending) return;
+
   const input = document.querySelector("#composer-input") as HTMLTextAreaElement;
   const text = input.value;
   input.value = "";
@@ -152,11 +163,21 @@ document.querySelector("#chat-form")?.addEventListener("submit", async (event) =
   await sendMessage(text);
 });
 
-document.querySelector("#composer-input")?.addEventListener("input", (event) => {
+const composerInput = document.querySelector("#composer-input") as HTMLTextAreaElement | null;
+
+composerInput?.addEventListener("input", (event) => {
   const target = event.currentTarget as HTMLTextAreaElement;
   target.style.height = "0";
   target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
 });
 
+composerInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey) return;
+
+  event.preventDefault();
+  if (!composerInput.value.trim() || isSending) return;
+  (document.querySelector("#chat-form") as HTMLFormElement | null)?.requestSubmit();
+});
+
 renderTranscript();
-void refreshHealth();
+void Promise.all([loadSession(), refreshHealth()]);

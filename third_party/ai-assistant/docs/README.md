@@ -6,6 +6,7 @@ It is built for a Windows desktop plus WSL workflow:
 - the backend runs locally in WSL
 - the desktop shell runs natively on Windows through `Tauri`
 - NemoClaw/OpenClaw acts as the planning engine
+- local model inference flows through NemoClaw rather than directly from this app
 - Telegram handles reminders
 
 ## Run locally
@@ -79,9 +80,40 @@ Optional environment variables:
 - `AI_ASSISTANT_WSL_DISTRO`
 - `AI_ASSISTANT_WSL_PROJECT_PATH`
 - `AI_ASSISTANT_SANDBOX`
+- `AI_ASSISTANT_MODEL`
+- `AI_ASSISTANT_DEBUG_TIMINGS=1`
 - `TELEGRAM_BOT_TOKEN`
 - `ALLOWED_CHAT_IDS`
 - `TAVILY_API_KEY`
+
+## Local Gemma 4 Through NemoClaw
+
+`AI Assistant` does not call `third_party/gemma4-nvfp4` directly.
+For local-model chat, the app sends prompts into the configured NemoClaw sandbox,
+and the sandboxed `openclaw agent` uses the model route already configured in
+NemoClaw.
+
+For the Gemma 4 local path:
+
+1. Start the host vLLM server from `third_party/gemma4-nvfp4`.
+2. Run `bash third_party/gemma4-nvfp4/smoke_test.sh`.
+3. Run `bash third_party/gemma4-nvfp4/integrate_with_nemoclaw.sh`.
+4. During onboarding, choose `Local vLLM [experimental]`.
+5. Start `AI Assistant`.
+
+Expected request path:
+
+```text
+AI Assistant -> NemoClaw sandbox -> openclaw agent -> inference.local -> gemma4-nvfp4 vLLM
+```
+
+For one-user latency tuning, expect the first turn in a chat to be colder than
+later turns because the model, sandbox bridge, and agent context are all warming
+up. The timing env var above helps measure that gap without changing the public
+chat API.
+
+If NemoClaw is unavailable, the chat UI still returns a simple local fallback
+reply so the app remains usable, but that fallback is not a real model response.
 
 ## Current v1 behavior
 

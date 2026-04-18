@@ -1,15 +1,16 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
-import type { BreakdownResult, EvidenceAnalysisResult, Task } from "../../shared/src/types.js";
+import type { BreakdownResult, ChatMessage, EvidenceAnalysisResult, Task } from "../../shared/src/types.js";
 import { clampConfidence } from "./utils.js";
 import { config } from "./config.js";
+import { runSandboxCommand } from "./sandbox-bridge.js";
 
 interface AgentResult {
   payload: Record<string, unknown>;
   usedFallback: boolean;
   error?: string;
+}
+
+function extractContentField(payload: Record<string, unknown>): string | null {
+  return typeof payload.content === "string" && payload.content.trim() ? payload.content.trim() : null;
 }
 
 function localBreakdownFallback(task: Task): BreakdownResult {
@@ -77,58 +78,137 @@ function localEvidenceFallback(task: Task | null, note: string): EvidenceAnalysi
 }
 
 function tryParseJson(text: string): Record<string, unknown> | null {
-  const match = text.match(/\{[\s\S]*\}$/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[0]) as Record<string, unknown>;
-  } catch {
-    return null;
+  const normalized = text.replace(/\u001b\[[0-9;]*m/g, "").trim();
+  if (!normalized) return null;
+
+  const directMatch = normalized.match(/\{[\s\S]*\}/);
+  if (directMatch) {
+    try {
+      return JSON.parse(directMatch[0]) as Record<string, unknown>;
+    } catch {
+      // Fall through to balanced scanning below.
+    }
   }
+
+  const starts: number[] = [];
+  for (let index = 0; index < normalized.length; index += 1) {
+    if (normalized[index] === "{") {
+      starts.push(index);
+    }
+  }
+
+  for (let startIndex = starts.length - 1; startIndex >= 0; startIndex -= 1) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    const start = starts[startIndex]!;
+
+    for (let index = start; index < normalized.length; index += 1) {
+      const char = normalized[index]!;
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+          continue;
+        }
+        if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+        continue;
+      }
+      if (char === "{") {
+        depth += 1;
+        continue;
+      }
+      if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const candidate = normalized.slice(start, index + 1);
+          try {
+            return JSON.parse(candidate) as Record<string, unknown>;
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
-async function runViaSandbox(prompt: string): Promise<AgentResult> {
+function stripBenignRuntimeWarnings(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return false;
+      return !(
+        /^\[SECURITY\] CAP_SETPCAP not available/i.test(trimmed) ||
+        /^Setting up NemoClaw/i.test(trimmed) ||
+        /^\[gateway\] Running as non-root/i.test(trimmed) ||
+        /^\(node:\d+\) \[UNDICI-EHPA\] Warning:/i.test(trimmed) ||
+        /^\(Use `node --trace-warnings .*$/i.test(trimmed) ||
+        /^\[agent\/embedded\] low context window:/i.test(trimmed) ||
+        /^\[compaction-safeguard\] Compaction safeguard:/i.test(trimmed)
+      );
+    })
+    .join("\n")
+    .trim();
+}
+
+function getAgentSessionId(history: ChatMessage[]): string {
+  const sessionId = history[0]?.sessionId ?? history.at(-1)?.sessionId;
+  return sessionId ? `ai-assistant-chat-${sessionId}` : "ai-assistant-ephemeral";
+}
+
+function buildAgentCommand(prompt: string, sessionId: string): string {
+  return (
+    `nemoclaw-start openclaw agent --agent ${JSON.stringify(config.nemoModel)} --local ` +
+    `-m ${JSON.stringify(prompt)} --session-id ${JSON.stringify(sessionId)}`
+  );
+}
+
+async function runViaSandboxCommand(command: string): Promise<AgentResult> {
   try {
-    const sshConfig = execFileSync("openshell", ["sandbox", "ssh-config", config.sandboxName], {
-      encoding: "utf8",
-    });
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-assistant-ssh-"));
-    const sshConfigPath = path.join(tempDir, "config");
-    fs.writeFileSync(sshConfigPath, sshConfig, { mode: 0o600 });
+    const { stdout, stderr, exitCode } = await runSandboxCommand(config.sandboxName, command);
+    const combinedOutput = `${stdout}\n${stderr}`.trim();
+    const parsed = tryParseJson(stdout) ?? tryParseJson(combinedOutput);
+    if (parsed) {
+      return { payload: parsed, usedFallback: false };
+    }
 
-    const sessionId = `ai-assistant-${Date.now()}`;
-    const command = `openclaw agent --agent ${config.nemoModel} --local -m ${JSON.stringify(prompt)} --session-id ${JSON.stringify(sessionId)}`;
+    const details = stripBenignRuntimeWarnings(stderr);
+    let error = "NemoClaw returned an unparseable response.";
+    if (/auto.*tool choice.*requires.*tool-call-parser|tool-call-parser|enable-auto-tool-choice/i.test(combinedOutput)) {
+      error = "The local vLLM server is missing tool-calling flags (--enable-auto-tool-choice and --tool-call-parser).";
+    } else if (/timed out|timeout/i.test(details)) {
+      error = "NemoClaw request timed out.";
+    } else if (/connection refused|could not resolve hostname|name or service not known|no route to host/i.test(details)) {
+      error = `NemoClaw sandbox "${config.sandboxName}" is unreachable.`;
+    } else if (/nemoclaw-start: command not found|openclaw: command not found|OPENCLAW_MISSING/i.test(details)) {
+      error = "OpenClaw is not available inside the NemoClaw sandbox.";
+    } else if (/inference\.local|provider|route/i.test(details)) {
+      error = "NemoClaw inference is not configured for the sandbox route.";
+    } else if (details) {
+      error = details;
+    } else if (exitCode !== 0) {
+      error = `NemoClaw command failed with exit code ${exitCode}.`;
+    }
 
-    return await new Promise((resolve) => {
-      const proc = spawn("ssh", ["-T", "-F", sshConfigPath, `openshell-${config.sandboxName}`, command], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-      proc.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-      proc.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-      proc.on("close", () => {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        const parsed = tryParseJson(stdout);
-        if (parsed) {
-          resolve({ payload: parsed, usedFallback: false });
-          return;
-        }
-        resolve({
-          payload: {},
-          usedFallback: true,
-          error: stderr.trim() || "NemoClaw returned an unparseable response.",
-        });
-      });
-      proc.on("error", (error) => {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-        resolve({ payload: {}, usedFallback: true, error: error.message });
-      });
-    });
+    return {
+      payload: {},
+      usedFallback: true,
+      error,
+    };
   } catch (error) {
     return {
       payload: {},
@@ -136,6 +216,10 @@ async function runViaSandbox(prompt: string): Promise<AgentResult> {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+async function runViaAgentPrompt(prompt: string, sessionId: string): Promise<AgentResult> {
+  return runViaSandboxCommand(buildAgentCommand(prompt, sessionId));
 }
 
 export async function breakdownTask(task: Task): Promise<AgentResult & { result: BreakdownResult }> {
@@ -149,7 +233,7 @@ export async function breakdownTask(task: Task): Promise<AgentResult & { result:
     `Estimate minutes: ${task.estimateMinutes}`,
   ].join("\n");
 
-  const agent = await runViaSandbox(prompt);
+  const agent = await runViaAgentPrompt(prompt, `ai-assistant-breakdown-${Date.now()}`);
   const fallback = localBreakdownFallback(task);
   const payload = agent.payload;
   const result: BreakdownResult =
@@ -179,7 +263,7 @@ export async function analyzeEvidence(task: Task | null, note: string): Promise<
     `User note: ${note}`,
   ].join("\n");
 
-  const agent = await runViaSandbox(prompt);
+  const agent = await runViaAgentPrompt(prompt, `ai-assistant-evidence-${Date.now()}`);
   const fallback = localEvidenceFallback(task, note);
   const payload = agent.payload;
   const result: EvidenceAnalysisResult =
@@ -214,14 +298,53 @@ export async function formatTaskNote(task: Task | null, rawText: string): Promis
     `Raw note: ${rawText}`,
   ].join("\n");
 
-  const agent = await runViaSandbox(prompt);
-  const content =
-    typeof agent.payload.content === "string" && agent.payload.content.trim()
-      ? agent.payload.content.trim()
-      : localNoteFallback(task, rawText);
+  const agent = await runViaAgentPrompt(prompt, `ai-assistant-note-${Date.now()}`);
+  const agentContent = extractContentField(agent.payload);
+  const usedFallback = agent.usedFallback || !agentContent;
+  const error = agentContent ? agent.error : (agent.error ?? "NemoClaw returned JSON without a content field.");
+  const content = agentContent ?? localNoteFallback(task, rawText);
 
   return {
     ...agent,
+    usedFallback,
+    error,
+    result: { content },
+  };
+}
+
+function localChatFallback(message: string): string {
+  const clean = message.trim();
+  if (!clean) {
+    return "I'm here. Send a message whenever you're ready.";
+  }
+  return `I received: "${clean}". Basic chat wiring is active, and this reply is coming from the backend session store.`;
+}
+
+export async function generateChatReply(history: ChatMessage[], rawText: string): Promise<AgentResult & { result: { content: string } }> {
+  const sessionId = getAgentSessionId(history);
+  const recentHistory = history
+    .slice(-6)
+    .map((message) => `${message.role}: ${message.text}`)
+    .join("\n");
+  const prompt = [
+    "Return JSON only.",
+    "You are a concise desktop assistant.",
+    'JSON shape: {"content":"string"}',
+    `Chat session id: ${sessionId}`,
+    `Recent chat:\n${recentHistory || "(none)"}`,
+    `Latest user message: ${rawText}`,
+  ].join("\n");
+
+  const agent = await runViaAgentPrompt(prompt, sessionId);
+  const agentContent = extractContentField(agent.payload);
+  const usedFallback = agent.usedFallback || !agentContent;
+  const error = agentContent ? agent.error : (agent.error ?? "NemoClaw returned JSON without a content field.");
+  const content = agentContent ?? localChatFallback(rawText);
+
+  return {
+    ...agent,
+    usedFallback,
+    error,
     result: { content },
   };
 }

@@ -4,6 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { config } from "./config.js";
 import type {
   AssistantRun,
+  ChatMessage,
+  ChatRole,
+  ChatSession,
   CreateTaskInput,
   Evidence,
   Proposal,
@@ -104,7 +107,90 @@ export class Database {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created_at
+      ON chat_messages(session_id, created_at);
     `);
+  }
+
+  createChatSession(title = "AI Assistant chat"): ChatSession {
+    const session: ChatSession = {
+      id: generateId("chat"),
+      title,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    this.db.prepare(`
+      INSERT INTO chat_sessions (id, title, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+    `).run(session.id, session.title, session.createdAt, session.updatedAt);
+
+    return session;
+  }
+
+  getLatestChatSession(): ChatSession | null {
+    const row = this.db.prepare("SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 1").get();
+    return row ? this.mapChatSession(row) : null;
+  }
+
+  getChatSession(sessionId: string): ChatSession | null {
+    const row = this.db.prepare("SELECT * FROM chat_sessions WHERE id = ?").get(sessionId);
+    return row ? this.mapChatSession(row) : null;
+  }
+
+  touchChatSession(sessionId: string): void {
+    this.db.prepare("UPDATE chat_sessions SET updated_at = ? WHERE id = ?").run(nowIso(), sessionId);
+  }
+
+  createChatMessage(input: Omit<ChatMessage, "id" | "createdAt">): ChatMessage {
+    const message: ChatMessage = {
+      id: generateId("chatmsg"),
+      createdAt: nowIso(),
+      ...input,
+    };
+
+    this.db.prepare(`
+      INSERT INTO chat_messages (id, session_id, role, text, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(message.id, message.sessionId, message.role, message.text, message.createdAt);
+
+    this.touchChatSession(message.sessionId);
+    return message;
+  }
+
+  listChatMessages(sessionId: string): ChatMessage[] {
+    return this.db
+      .prepare("SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC")
+      .all(sessionId)
+      .map((row) => this.mapChatMessage(row));
+  }
+
+  listRecentChatMessages(sessionId: string, limit: number): ChatMessage[] {
+    const boundedLimit = Math.max(1, Math.trunc(limit));
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+      )
+      .all(sessionId, boundedLimit)
+      .map((row) => this.mapChatMessage(row));
+
+    return rows.reverse();
   }
 
   createTask(input: CreateTaskInput): Task {
@@ -491,6 +577,25 @@ export class Database {
       content: String(row.content),
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapChatSession(row: Row): ChatSession {
+    return {
+      id: String(row.id),
+      title: String(row.title),
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private mapChatMessage(row: Row): ChatMessage {
+    return {
+      id: String(row.id),
+      sessionId: String(row.session_id),
+      role: row.role as ChatRole,
+      text: String(row.text),
+      createdAt: String(row.created_at),
     };
   }
 }

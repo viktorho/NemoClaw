@@ -9,6 +9,22 @@ export type DeliveryStatus = "pending" | "sent" | "failed";
 export type AssistantRunType = "breakdown" | "schedule" | "evidence" | "recovery";
 export type TaskNoteAuthor = "user" | "assistant";
 export type TaskNoteSource = "manual" | "screenshot" | "assistant_summary";
+export type ChatRole = "assistant" | "user" | "system";
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  sessionId: string;
+  role: ChatRole;
+  text: string;
+  createdAt: string;
+}
 
 export interface Task {
   id: string;
