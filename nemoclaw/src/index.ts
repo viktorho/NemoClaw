@@ -18,6 +18,9 @@ import {
   loadOnboardConfig,
 } from "./onboard/config.js";
 
+const LOCAL_AGENT_CONTEXT_WINDOW = 16_384;
+const LOCAL_AGENT_MAX_OUTPUT = 1_024;
+
 // ---------------------------------------------------------------------------
 // OpenClaw Plugin SDK compatible types (mirrors openclaw/plugin-sdk)
 // ---------------------------------------------------------------------------
@@ -136,6 +139,13 @@ export interface NemoClawConfig {
 function activeModelEntries(
   onboardCfg: ReturnType<typeof loadOnboardConfig>,
 ): ModelProviderEntry[] {
+  const isLocalRoute =
+    onboardCfg?.endpointType === "vllm" ||
+    onboardCfg?.endpointType === "ollama" ||
+    onboardCfg?.endpointType === "nim-local";
+  const onboardContextWindow = isLocalRoute ? LOCAL_AGENT_CONTEXT_WINDOW : 131072;
+  const onboardMaxOutput = isLocalRoute ? LOCAL_AGENT_MAX_OUTPUT : 8192;
+
   if (!onboardCfg?.model) {
     return [
       {
@@ -169,8 +179,8 @@ function activeModelEntries(
     {
       id: `inference/${onboardCfg.model}`,
       label: onboardCfg.model,
-      contextWindow: 131072,
-      maxOutput: 8192,
+      contextWindow: onboardContextWindow,
+      maxOutput: onboardMaxOutput,
     },
   ];
 }

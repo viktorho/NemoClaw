@@ -77,6 +77,28 @@ describe("plugin registration", () => {
       expect.objectContaining({ id: "inference/nvidia/custom-model" }),
     ]);
   });
+
+  it("uses local-route context and output limits for vllm onboard config", () => {
+    mockedLoadOnboardConfig.mockReturnValue({
+      endpointType: "vllm",
+      endpointUrl: "https://inference.local/v1",
+      ncpPartner: null,
+      model: "gemma-4",
+      profile: "inference-local",
+      credentialEnv: "OPENAI_API_KEY",
+      onboardedAt: "2026-04-10T00:00:00.000Z",
+    });
+    const api = createMockApi();
+    register(api);
+    const providerArg = vi.mocked(api.registerProvider).mock.calls[0][0];
+    expect(providerArg.models?.chat).toEqual([
+      expect.objectContaining({
+        id: "inference/gemma-4",
+        contextWindow: 16384,
+        maxOutput: 1024,
+      }),
+    ]);
+  });
 });
 
 describe("getPluginConfig", () => {

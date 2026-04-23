@@ -58,10 +58,9 @@ function stageOptimizedSandboxBuildContext(rootDir, tmpDir = os.tmpdir()) {
   });
 
   fs.mkdirSync(stagedScriptsDir, { recursive: true });
-  fs.copyFileSync(
-    path.join(rootDir, "scripts", "nemoclaw-start.sh"),
-    path.join(stagedScriptsDir, "nemoclaw-start.sh"),
-  );
+  for (const file of ["nemoclaw-start.sh", "test_tavily_api.py"]) {
+    fs.copyFileSync(path.join(rootDir, "scripts", file), path.join(stagedScriptsDir, file));
+  }
 
   return { buildCtx, stagedDockerfile };
 }

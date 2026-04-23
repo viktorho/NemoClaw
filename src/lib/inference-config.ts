@@ -21,6 +21,8 @@ export const CLOUD_MODEL_OPTIONS = [
 export const DEFAULT_ROUTE_PROFILE = "inference-local";
 export const DEFAULT_ROUTE_CREDENTIAL_ENV = "OPENAI_API_KEY";
 export const MANAGED_PROVIDER_ID = "inference";
+export const LOCAL_AGENT_CONTEXT_WINDOW = 16_384;
+export const LOCAL_AGENT_MAX_OUTPUT = 1_024;
 export { DEFAULT_OLLAMA_MODEL };
 
 export interface ProviderSelectionConfig {

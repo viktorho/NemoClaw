@@ -69,6 +69,10 @@ const providerModels = require("../../dist/lib/provider-models");
 const sandboxCreateStream = require("../../dist/lib/sandbox-create-stream");
 const validationRecovery = require("../../dist/lib/validation-recovery");
 const webSearch = require("../../dist/lib/web-search");
+const {
+  LOCAL_AGENT_CONTEXT_WINDOW,
+  LOCAL_AGENT_MAX_OUTPUT,
+} = require("../../dist/lib/inference-config");
 
 /**
  * Create a temp file inside a directory with a cryptographically random name.
@@ -841,6 +845,8 @@ function getSandboxInferenceConfig(model, provider = null, preferredInferenceApi
   let inferenceBaseUrl = "https://inference.local/v1";
   let inferenceApi = preferredInferenceApi || "openai-completions";
   let inferenceCompat = null;
+  let modelContextWindow = 131072;
+  let modelMaxTokens = 4096;
 
   switch (provider) {
     case "openai-api":
@@ -868,15 +874,30 @@ function getSandboxInferenceConfig(model, provider = null, preferredInferenceApi
         supportsStore: false,
       };
       break;
-    case "nvidia-prod":
+    case "ollama-local":
+    case "vllm-local":
     case "nvidia-nim":
+      providerKey = "inference";
+      primaryModelRef = `inference/${model}`;
+      modelContextWindow = LOCAL_AGENT_CONTEXT_WINDOW;
+      modelMaxTokens = LOCAL_AGENT_MAX_OUTPUT;
+      break;
+    case "nvidia-prod":
     default:
       providerKey = "inference";
       primaryModelRef = `inference/${model}`;
       break;
   }
 
-  return { providerKey, primaryModelRef, inferenceBaseUrl, inferenceApi, inferenceCompat };
+  return {
+    providerKey,
+    primaryModelRef,
+    inferenceBaseUrl,
+    inferenceApi,
+    inferenceCompat,
+    modelContextWindow,
+    modelMaxTokens,
+  };
 }
 
 function patchStagedDockerfile(
@@ -890,8 +911,15 @@ function patchStagedDockerfile(
   messagingChannels = [],
   messagingAllowedIds = {},
 ) {
-  const { providerKey, primaryModelRef, inferenceBaseUrl, inferenceApi, inferenceCompat } =
-    getSandboxInferenceConfig(model, provider, preferredInferenceApi);
+  const {
+    providerKey,
+    primaryModelRef,
+    inferenceBaseUrl,
+    inferenceApi,
+    inferenceCompat,
+    modelContextWindow,
+    modelMaxTokens,
+  } = getSandboxInferenceConfig(model, provider, preferredInferenceApi);
   let dockerfile = fs.readFileSync(dockerfilePath, "utf8");
   dockerfile = dockerfile.replace(/^ARG NEMOCLAW_MODEL=.*$/m, `ARG NEMOCLAW_MODEL=${model}`);
   dockerfile = dockerfile.replace(
@@ -914,6 +942,14 @@ function patchStagedDockerfile(
   dockerfile = dockerfile.replace(
     /^ARG NEMOCLAW_INFERENCE_COMPAT_B64=.*$/m,
     `ARG NEMOCLAW_INFERENCE_COMPAT_B64=${encodeDockerJsonArg(inferenceCompat)}`,
+  );
+  dockerfile = dockerfile.replace(
+    /^ARG NEMOCLAW_MODEL_CONTEXT_WINDOW=.*$/m,
+    `ARG NEMOCLAW_MODEL_CONTEXT_WINDOW=${modelContextWindow}`,
+  );
+  dockerfile = dockerfile.replace(
+    /^ARG NEMOCLAW_MODEL_MAX_TOKENS=.*$/m,
+    `ARG NEMOCLAW_MODEL_MAX_TOKENS=${modelMaxTokens}`,
   );
   dockerfile = dockerfile.replace(
     /^ARG NEMOCLAW_BUILD_ID=.*$/m,

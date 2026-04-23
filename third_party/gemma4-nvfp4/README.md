@@ -4,6 +4,11 @@ This directory is a host-side setup kit for running
 NVFP4 Gemma 4 checkpoints locally and then routing NemoClaw to them through
 `vllm-local`.
 
+When `third_party/ai-assistant` uses a local Gemma model, it should still talk
+only to NemoClaw. This directory provides the host-side vLLM server that
+NemoClaw routes to through `inference.local`; `ai-assistant` does not call this
+endpoint directly.
+
 ## What This Is
 
 - A local reference setup for your machine.
@@ -32,10 +37,10 @@ NVFP4 Gemma 4 checkpoints locally and then routing NemoClaw to them through
   2. only then retry the 26B A4B MoE model
   3. treat the official 31B NVIDIA checkpoint as out-of-scope for a 24 GB GPU
 - The default server settings in this directory are intentionally conservative
-  for a laptop:
-- `MAX_MODEL_LEN=4096`
-- `MAX_NUM_SEQS=2`
-- `GPU_MEMORY_UTILIZATION=0.90`
+  for a single-user latency path:
+- `MAX_NUM_SEQS=1`
+- `MAX_MODEL_LEN=16384`
+- `GPU_MEMORY_UTILIZATION=0.78`
 - `KV_CACHE_DTYPE=fp8`
 - `MOE_BACKEND=marlin`
 
@@ -58,9 +63,52 @@ NVFP4 Gemma 4 checkpoints locally and then routing NemoClaw to them through
    - keep this shell open while the server runs
 6. In a second shell, smoke-test the local OpenAI-compatible endpoint:
    - `bash third_party/gemma4-nvfp4/smoke_test.sh`
-7. Integrate the running host model with NemoClaw:
+7. Chat with the running model directly:
+   - `bash third_party/gemma4-nvfp4/chat_with_nvfp4.sh`
+   - or send a single prompt:
+   - `bash third_party/gemma4-nvfp4/chat_with_nvfp4.sh "Summarize NVFP4 in one paragraph."`
+8. Integrate the running host model with NemoClaw:
    - `bash third_party/gemma4-nvfp4/integrate_with_nemoclaw.sh`
-8. During onboarding, select `Local vLLM [experimental]`
+9. During onboarding, select `Local vLLM [experimental]`
+
+## Experimental TurboQuant Path
+
+TurboQuant is supported here only as an experimental, opt-in path for the
+host-side vLLM server. The stable default remains `KV_BACKEND=fp8`.
+
+Recommended install order for TurboQuant:
+
+1. prebuilt wheel via `TURBOQUANT_WHEEL=/abs/path/file.whl`
+2. explicit package spec via `TURBOQUANT_PIP_SPEC=...`
+3. git source only as fallback
+
+Wheel-first is strongly preferred because source builds may need custom CUDA
+kernel compilation. If you install from git or another source package:
+
+- `nvcc` must be available on `PATH`
+- the local CUDA toolkit version must match the CUDA runtime that PyTorch was
+  built against
+- bootstrap will stop with a clear error if that preflight fails
+
+Example wheel install:
+
+```bash
+ENABLE_TURBOQUANT=1 \
+TURBOQUANT_WHEEL=/abs/path/turboquant_vllm.whl \
+bash third_party/gemma4-nvfp4/bootstrap_vllm.sh
+```
+
+Example source install:
+
+```bash
+ENABLE_TURBOQUANT=1 \
+TURBOQUANT_PIP_SPEC='git+https://example.invalid/turboquant-vllm.git' \
+TURBOQUANT_IMPORT_NAME=turboquant_vllm \
+bash third_party/gemma4-nvfp4/bootstrap_vllm.sh
+```
+
+The bootstrap script validates the import after install and prints the detected
+module path/version.
 
 ## NemoClaw Notes
 
@@ -69,6 +117,10 @@ NVFP4 Gemma 4 checkpoints locally and then routing NemoClaw to them through
   `http://localhost:8000/v1/models`.
 - The sandbox talks to `https://inference.local/v1`; OpenShell routes that to
   the host vLLM endpoint.
+- `ai-assistant` should send user prompts into the NemoClaw sandbox, which then
+  reaches this host model through the same `inference.local` route.
+- For a single user, expect the first prompt to be the coldest and later turns
+  to warm up as the server, bridge, and model state settle.
 
 ## Integration Command
 
@@ -91,6 +143,98 @@ vLLM provider in the interactive flow so NemoClaw registers the route cleanly.
 
 If you run the integration script before the server is up, it now prints the
 exact `serve_nvfp4.sh` command you need and exits cleanly.
+
+## Direct Chat Command
+
+After `serve_nvfp4.sh` is running successfully, use:
+
+```bash
+bash third_party/gemma4-nvfp4/chat_with_nvfp4.sh
+```
+
+Useful overrides:
+
+- `MODEL_ID=...` to force a specific served model name
+- `SYSTEM_PROMPT="You are a terse assistant."`
+- `MAX_TOKENS=1024`
+- `TEMPERATURE=0.2`
+- `BASE_URL=http://localhost:8000`
+
+The script keeps conversation history in memory for the current session and
+supports:
+
+- `/help`
+- `/reset`
+- `/exit`
+
+## KV Backend Selection
+
+`serve_nvfp4.sh` now supports an explicit backend mode:
+
+- `KV_BACKEND=fp8` keeps the default stable path
+- `KV_BACKEND=turboquant` enables the experimental path
+
+Useful TurboQuant-specific env vars:
+
+- `TURBOQUANT_IMPORT_NAME=turboquant_vllm`
+- `TURBOQUANT_KV_CACHE_DTYPE=...`
+- `TURBOQUANT_ATTENTION_BACKEND=...`
+- `TURBOQUANT_EXTRA_VLLM_ARGS='...'`
+- `ALLOW_TURBOQUANT_FALLBACK=1`
+
+If `KV_BACKEND=turboquant` is selected but the backend is not importable, the
+serve script fails fast by default. Set `ALLOW_TURBOQUANT_FALLBACK=1` if you
+want it to log the issue and fall back to `fp8`.
+
+Example:
+
+```bash
+KV_BACKEND=turboquant \
+TURBOQUANT_IMPORT_NAME=turboquant_vllm \
+TURBOQUANT_KV_CACHE_DTYPE=fp8 \
+bash third_party/gemma4-nvfp4/serve_nvfp4.sh
+```
+
+This experimental path does not change NemoClaw/OpenClaw limits. Local route
+config remains aligned to:
+
+- `contextWindow = 16384`
+- `maxTokens = 1024`
+
+TurboQuant is being tested as a memory-efficiency aid, not as proof that the
+OpenClaw runtime prompt will fit comfortably at larger context windows.
+
+## Benchmarking FP8 vs TurboQuant
+
+Use the benchmark helper to compare VRAM and latency between `fp8` and
+TurboQuant at the same `16384` context:
+
+```bash
+BENCHMARK_MODE=fp8 \
+bash third_party/gemma4-nvfp4/benchmark_nvfp4.sh
+```
+
+```bash
+BENCHMARK_MODE=turboquant \
+SANDBOX_NAME=momo \
+AGENT_NAME=main \
+bash third_party/gemma4-nvfp4/benchmark_nvfp4.sh
+```
+
+The benchmark captures:
+
+- GPU memory before startup warm-up
+- GPU memory after one warm-up request
+- GPU memory after one direct measured request
+- TTFT for one streaming local `/v1/chat/completions` request
+- total latency for one direct local request
+- optional total latency for one sandboxed `openclaw agent` request
+
+Acceptance should be comparative:
+
+- TurboQuant should reduce memory use or improve headroom in a meaningful way
+- TTFT regression should stay acceptable for agent use
+- if there is no VRAM win or TTFT gets much worse, stay on `fp8`
 
 ## Current Diagnosis
 
@@ -164,12 +308,17 @@ If a model still OOMs or becomes unstable on the laptop GPU, reduce pressure
 before giving up:
 
 ```bash
-MAX_MODEL_LEN=2048 MAX_NUM_SEQS=1 GPU_MEMORY_UTILIZATION=0.85 \
+MAX_MODEL_LEN=16384 MAX_NUM_SEQS=1 GPU_MEMORY_UTILIZATION=0.78 \
   bash third_party/gemma4-nvfp4/serve_nvfp4.sh
 ```
 
 Only increase those limits after the server is stable and the NemoClaw route is
 working.
+
+If you are testing TurboQuant, keep the local route limits fixed while you
+measure it. The point of the experiment is to compare memory and latency for
+the same `16384 / 1024` operating point, not to mask the result by changing the
+NemoClaw/OpenClaw budget at the same time.
 
 ## Model Notes
 
