@@ -235,6 +235,12 @@ if [ "${ENABLE_AUTO_TOOL_CHOICE}" = "1" ]; then
   tool_call_args+=(--enable-auto-tool-choice --tool-call-parser "${TOOL_CALL_PARSER}")
 fi
 
+extra_vllm_args=()
+if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
+  # shellcheck disable=SC2206
+  extra_vllm_args=(${VLLM_EXTRA_ARGS})
+fi
+
 exec vllm serve "${MODEL_SOURCE}" \
   --served-model-name "${SERVED_MODEL_NAME}" \
   --host "${HOST}" \
@@ -249,4 +255,5 @@ exec vllm serve "${MODEL_SOURCE}" \
   --moe-backend "${MOE_BACKEND}" \
   "${kv_backend_args[@]}" \
   "${tool_call_args[@]}" \
+  "${extra_vllm_args[@]}" \
   --trust-remote-code
