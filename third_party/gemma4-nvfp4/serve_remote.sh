@@ -2,27 +2,22 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Launch vLLM Gemma 4 with API-key auth, exposed via serveo.net SSH tunnel.
-# No accounts, no tokens. Stable subdomain.
+# Launch vLLM Gemma 4 with API-key auth, exposed via SSH tunnel relay.
+# No accounts, no tokens. URL printed at startup.
 #
 # Run:
 #   bash third_party/gemma4-nvfp4/serve_remote.sh
 #
-# Override subdomain:
-#   SUBDOMAIN=my-name bash third_party/gemma4-nvfp4/serve_remote.sh
+# Switch relay (default serveo.net):
+#   TUNNEL_HOST=localhost.run bash third_party/gemma4-nvfp4/serve_remote.sh
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEY_FILE="${ROOT_DIR}/.api_key"
-SUB_FILE="${ROOT_DIR}/.subdomain"
+TUNNEL_LOG="${ROOT_DIR}/.tunnel.log"
 PORT="${PORT:-8000}"
 TUNNEL_HOST="${TUNNEL_HOST:-serveo.net}"
-
-if [ ! -f "${SUB_FILE}" ] && [ -z "${SUBDOMAIN:-}" ]; then
-  printf 'gemma4-%s\n' "$(openssl rand -hex 4)" >"${SUB_FILE}"
-fi
-SUBDOMAIN="${SUBDOMAIN:-$(<"${SUB_FILE}")}"
 
 if [ ! -f "${KEY_FILE}" ]; then
   umask 077
@@ -30,21 +25,35 @@ if [ ! -f "${KEY_FILE}" ]; then
 fi
 API_KEY="$(<"${KEY_FILE}")"
 
-PUBLIC_URL="https://${SUBDOMAIN}.${TUNNEL_HOST}"
-
 cleanup() { [ -n "${TUNNEL_PID:-}" ] && kill "${TUNNEL_PID}" 2>/dev/null || true; }
 trap cleanup EXIT
 
+: >"${TUNNEL_LOG}"
+
+# Free anonymous tunnel: serveo assigns random subdomain. No custom subdomain
+# (custom needs login). Capture printed URL from ssh stderr.
 ssh -o StrictHostKeyChecking=accept-new \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
   -o ExitOnForwardFailure=yes \
-  -N -R "${SUBDOMAIN}:80:localhost:${PORT}" "${TUNNEL_HOST}" &
+  -R "80:localhost:${PORT}" "${TUNNEL_HOST}" >"${TUNNEL_LOG}" 2>&1 &
 TUNNEL_PID=$!
 
-sleep 3
-if ! kill -0 "${TUNNEL_PID}" 2>/dev/null; then
-  echo "error: ssh tunnel to ${TUNNEL_HOST} failed (subdomain taken? try another)" >&2
+PUBLIC_URL=""
+for _ in $(seq 1 20); do
+  sleep 1
+  if ! kill -0 "${TUNNEL_PID}" 2>/dev/null; then
+    echo "error: ssh tunnel exited. Log:" >&2
+    cat "${TUNNEL_LOG}" >&2
+    exit 1
+  fi
+  PUBLIC_URL="$(grep -oE 'https?://[a-zA-Z0-9.-]+' "${TUNNEL_LOG}" | head -n1 || true)"
+  [ -n "${PUBLIC_URL}" ] && break
+done
+
+if [ -z "${PUBLIC_URL}" ]; then
+  echo "error: tunnel did not produce public URL. Log:" >&2
+  cat "${TUNNEL_LOG}" >&2
   exit 1
 fi
 
@@ -63,8 +72,8 @@ cat <<EOF
      -H "Content-Type: application/json" \\
      -d '{"model":"gemma-4","messages":[{"role":"user","content":"hi"}]}'
 
- Subdomain persisted in: ${SUB_FILE}
- API key persisted in:   ${KEY_FILE}
+ NOTE: URL changes each restart (free anonymous tunnel).
+ Tunnel log: ${TUNNEL_LOG}
 ================================================================
 
 EOF
